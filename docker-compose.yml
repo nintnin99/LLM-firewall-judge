@@ -1,0 +1,32 @@
+services:
+  n8n:
+    image: n8nio/n8n
+    ports: ["5678:5678"]
+    environment:
+      - GENERIC_TIMEZONE=Europe/Paris
+      - TZ=Europe/Paris
+      - N8N_SECURE_COOKIE=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows
+    depends_on: [ollama, qdrant, postgres]
+    restart: unless-stopped
+  ollama:
+    image: ollama/ollama
+    ports: ["11434:11434"]
+    volumes: [ollama_data:/root/.ollama]
+    restart: unless-stopped
+  qdrant:
+    image: qdrant/qdrant
+    ports: ["6333:6333"]
+    volumes: [qdrant_data:/qdrant/storage]
+    restart: unless-stopped
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=firewall
+    volumes: [pg_data:/var/lib/postgresql/data]
+    restart: unless-stopped
+volumes: {n8n_data: {}, ollama_data: {}, qdrant_data: {}, pg_data: {}}

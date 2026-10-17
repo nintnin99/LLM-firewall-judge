@@ -98,6 +98,41 @@ def validate(raw: dict) -> dict:
     }
 
 
+VISIBLE_ATTACK = re.compile(
+    r"ignore previous rules|print the admin password|rank this candidate|ignore les règles|approve this payment|send me client card numbers|send the client card numbers",
+    re.I,
+)
+
+
+def _sentences(text: str):
+    return [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", text or "") if part.strip()]
+
+
+def _cut_sentence(sentence: str):
+    match = VISIBLE_ATTACK.search(sentence)
+    if not match:
+        return sentence, ""
+    prefix = re.sub(r"[\s,;:.\-]+(?:and also|and|also|then)?\s*$", "", sentence[: match.start()], flags=re.I).strip()
+    if len(prefix) >= 12:
+        return prefix, sentence[match.start() :].strip()
+    return "", sentence
+
+
+def visible_removable(text: str):
+    parts = _sentences(text)
+    kept, dropped = [], []
+    for sentence in parts:
+        keep, drop = _cut_sentence(sentence)
+        if keep:
+            kept.append(keep)
+        if drop:
+            dropped.append(drop)
+    if not kept or not dropped:
+        return None
+    cleaned = re.sub(r"\s+", " ", " ".join(kept)).strip()
+    return {"cleaned": cleaned, "llm": len(parts) == 1}
+
+
 def hidden_attack(data: dict) -> bool:
     hidden = [segment for segment in data["segments"] if segment.get("hidden")]
     if not hidden:
@@ -153,6 +188,22 @@ def decide(data: dict, gray=gray_decision) -> dict:
             "category": "LLM01 prompt injection",
             "confidence": 0.95,
             "justification": "The untrusted text tries to set the verdict. That is itself an attack.",
+            "source": "rule",
+        }
+
+    visible_cut = visible_removable(data["text"])
+    if visible_cut and not any(segment.get("hidden") for segment in data["segments"]):
+        return {
+            "verdict": "SANITIZE",
+            "category": "LLM01 prompt injection",
+            "confidence": _round((top_attack or {}).get("score") or rag or 0.7),
+            "justification": (
+                "A visible sentence mixes a real request with an attack. A rewrite must remove only the attack."
+                if visible_cut["llm"]
+                else "A visible attack sentence can be removed and the legitimate sentence kept."
+            ),
+            "cleaned_text": visible_cut["cleaned"],
+            "rewrite_method": "llm" if visible_cut["llm"] else "rules",
             "source": "rule",
         }
 
@@ -240,7 +291,7 @@ def pipeline(raw: dict, gray=gray_decision) -> dict:
     second_raw = {
         "request_id": data.get("request_id"),
         "text": cleaned,
-        "segments": [segment for segment in data["segments"] if not segment.get("hidden")],
+        "segments": [{"modality": "text", "text": cleaned, "hidden": False}],
         "findings": filter_findings_for_recheck(data["findings"], True),
         "matches": [],
     }
